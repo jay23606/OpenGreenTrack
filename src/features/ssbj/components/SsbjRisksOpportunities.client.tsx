@@ -49,7 +49,7 @@ export const SsbjRisksOpportunities = ({ reportId }: { reportId: string }) => {
   const list = useSsbjRisksOpportunities(reportId, report !== null);
   // null: ダイアログを閉じている / 'new': 登録 / それ以外: 編集中の対象
   const [editing, setEditing] = useState<SsbjRiskOpportunity | 'new' | null>(null);
-  // 候補を採用して登録しているときの候補（登録できたら採用を記録する）。
+  // 候補を採用して登録しているときの候補（登録と採用の記録は一緒に保存する）。
   const [adoptingCandidate, setAdoptingCandidate] = useState<SsbjIndustryCandidate | null>(null);
   const candidates = useSsbjRiskCandidates(reportId, report !== null);
   const deletion = useSsbjRiskOpportunityDelete();
@@ -78,24 +78,10 @@ export const SsbjRisksOpportunities = ({ reportId }: { reportId: string }) => {
     const saved =
       editing && editing !== 'new'
         ? await updateSsbjRiskOpportunity(editing.id, input)
-        : await createSsbjRiskOpportunity(report, input);
+        : adoptingCandidate
+          ? await candidates.adopt(report.id, adoptingCandidate, input)
+          : await createSsbjRiskOpportunity(report, input);
     list.upsertItem(saved);
-    if (editing === 'new' && adoptingCandidate) {
-      try {
-        await candidates.decide(report, {
-          candidateId: adoptingCandidate.id,
-          candidateVersion: SSBJ_INDUSTRY_CANDIDATE_VERSION,
-          industryCode: report.industryCode,
-          decision: 'adopted',
-          reason: null,
-          riskOpportunityId: saved.id,
-        });
-      } catch {
-        // 登録は済んでいるので、フォームは閉じて、採用の記録だけ失敗したことを伝える。
-        showToast('リスク・機会は登録しましたが、候補の採用を記録できませんでした。候補の欄で「採用して登録」をやり直さず、画面を開き直してください', 'error');
-        return;
-      }
-    }
     showToast(editing === 'new' ? 'リスク・機会を登録しました' : 'リスク・機会を保存しました', 'success');
   });
 
