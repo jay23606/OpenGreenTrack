@@ -3,6 +3,7 @@
 // SSBJ レポートのリスク・機会画面（/ssbj/[reportId]/risks）。複数のリスク・機会を登録・編集・削除し、
 // リスクの種類・説明・時間軸・章 / 項目への関連を持たせる。あわせてレポートとしての時間軸の定義を編集する。
 // 変更は作業中の内容で、保存版はレポート詳細の手動保存で作る。
+// 基本情報の業種（SICS）から出した候補を、採用して登録・除外できる（SsbjRiskCandidates。判断の記録は useSsbjRiskCandidates）。
 // 存在しない・他組織のレポートは「見つかりません」を表示し、他組織のレポートの存在を示唆しない。
 // 読込は useSsbjReport / useSsbjRisksOpportunities / useSsbjTimeHorizons、入力は useSsbjRiskOpportunityForm /
 // useSsbjTimeHorizonForm、削除は useSsbjRiskOpportunityDelete が持ち、ここは組み立てるだけ。
@@ -17,6 +18,7 @@ import { LoadingIndicator } from '@/components/ui/PageLoading';
 import { Toast } from '@/components/ui/Toast.client';
 import { useToast } from '@/hooks/useToast';
 import { useSsbjReport } from '../hooks/useSsbjReport';
+import { useSsbjRiskCandidates } from '../hooks/useSsbjRiskCandidates';
 import { useSsbjRiskOpportunityDelete } from '../hooks/useSsbjRiskOpportunityDelete';
 import { useSsbjRiskOpportunityForm } from '../hooks/useSsbjRiskOpportunityForm';
 import { useSsbjRisksOpportunities } from '../hooks/useSsbjRisksOpportunities';
@@ -25,7 +27,13 @@ import { useSsbjTimeHorizons } from '../hooks/useSsbjTimeHorizons';
 import { createSsbjRiskOpportunity, updateSsbjRiskOpportunity } from '../services/riskOpportunityService';
 import { saveSsbjTimeHorizons } from '../services/timeHorizonService';
 import type { SsbjRiskOpportunity } from '../types';
+import {
+  SSBJ_INDUSTRY_CANDIDATE_VERSION,
+  ssbjRiskFormValuesFromCandidate,
+  type SsbjIndustryCandidate,
+} from '../utils/industryCandidates';
 import { toSsbjRiskOpportunityFormValues } from '../utils/riskOpportunity';
+import { SsbjRiskCandidates } from './SsbjRiskCandidates.client';
 import { SsbjRiskOpportunityDeleteDialog } from './SsbjRiskOpportunityDeleteDialog.client';
 import { SsbjRiskOpportunityDialog } from './SsbjRiskOpportunityDialog.client';
 import { SsbjRiskOpportunityList } from './SsbjRiskOpportunityList';
@@ -41,6 +49,9 @@ export const SsbjRisksOpportunities = ({ reportId }: { reportId: string }) => {
   const list = useSsbjRisksOpportunities(reportId, report !== null);
   // null: ダイアログを閉じている / 'new': 登録 / それ以外: 編集中の対象
   const [editing, setEditing] = useState<SsbjRiskOpportunity | 'new' | null>(null);
+  // 候補を採用して登録しているときの候補（登録できたら採用を記録する）。
+  const [adoptingCandidate, setAdoptingCandidate] = useState<SsbjIndustryCandidate | null>(null);
+  const candidates = useSsbjRiskCandidates(reportId, report !== null);
   const deletion = useSsbjRiskOpportunityDelete();
   const horizons = useSsbjTimeHorizons(reportId, report !== null);
   const [isEditingHorizons, setIsEditingHorizons] = useState<boolean>(false);
@@ -69,22 +80,70 @@ export const SsbjRisksOpportunities = ({ reportId }: { reportId: string }) => {
         ? await updateSsbjRiskOpportunity(editing.id, input)
         : await createSsbjRiskOpportunity(report, input);
     list.upsertItem(saved);
+    if (editing === 'new' && adoptingCandidate) {
+      try {
+        await candidates.decide(report, {
+          candidateId: adoptingCandidate.id,
+          candidateVersion: SSBJ_INDUSTRY_CANDIDATE_VERSION,
+          industryCode: report.industryCode,
+          decision: 'adopted',
+          reason: null,
+          riskOpportunityId: saved.id,
+        });
+      } catch {
+        // 登録は済んでいるので、フォームは閉じて、採用の記録だけ失敗したことを伝える。
+        showToast('リスク・機会は登録しましたが、候補の採用を記録できませんでした。候補の欄で「採用して登録」をやり直さず、画面を開き直してください', 'error');
+        return;
+      }
+    }
     showToast(editing === 'new' ? 'リスク・機会を登録しました' : 'リスク・機会を保存しました', 'success');
   });
 
   const openCreate = () => {
     form.reset();
+    setAdoptingCandidate(null);
+    setEditing('new');
+  };
+
+  const openAdopt = (candidate: SsbjIndustryCandidate) => {
+    form.reset(ssbjRiskFormValuesFromCandidate(candidate));
+    setAdoptingCandidate(candidate);
     setEditing('new');
   };
 
   const openEdit = (item: SsbjRiskOpportunity) => {
-    form.reset(toSsbjRiskOpportunityFormValues(item));
+    form.reset(toSsbjRiskOpportunityFormValues(item), item.linkTargets);
+    setAdoptingCandidate(null);
     setEditing(item);
+  };
+
+  const closeDialog = () => {
+    setEditing(null);
+    setAdoptingCandidate(null);
+  };
+
+  const excludeCandidate = async (candidate: SsbjIndustryCandidate, reason: string) => {
+    if (!report) return;
+    await candidates.decide(report, {
+      candidateId: candidate.id,
+      candidateVersion: SSBJ_INDUSTRY_CANDIDATE_VERSION,
+      industryCode: report.industryCode,
+      decision: 'excluded',
+      reason,
+      riskOpportunityId: null,
+    });
+    showToast('候補を除外しました', 'success');
+  };
+
+  const undoCandidate = async (candidate: SsbjIndustryCandidate) => {
+    if (!report) return;
+    await candidates.undo(report.id, candidate.id);
+    showToast('候補を未検討に戻しました（登録したリスク・機会は残ります）', 'success');
   };
 
   const handleSubmit = async (event: FormEvent) => {
     if (await form.submit(event)) {
-      setEditing(null);
+      closeDialog();
     }
   };
 
@@ -96,8 +155,9 @@ export const SsbjRisksOpportunities = ({ reportId }: { reportId: string }) => {
     }
   };
 
-  const errorMessage = reportError || list.errorMessage || horizons.errorMessage;
-  const isLoading = isReportLoading || (report !== null && (list.isLoading || horizons.isLoading));
+  const errorMessage = reportError || list.errorMessage || horizons.errorMessage || candidates.errorMessage;
+  const isLoading =
+    isReportLoading || (report !== null && (list.isLoading || horizons.isLoading || candidates.isLoading));
 
   return (
     <div className="page-content gt-scroll relative">
@@ -149,7 +209,7 @@ export const SsbjRisksOpportunities = ({ reportId }: { reportId: string }) => {
               SSBJレポート一覧へ戻る
             </Link>
           </Card>
-        ) : report && !list.errorMessage && !horizons.errorMessage ? (
+        ) : report && !list.errorMessage && !horizons.errorMessage && !candidates.errorMessage ? (
           <SsbjEditorLayout
             report={report}
             overrides={{ risks_opportunities: list.items, time_horizons: horizons.definitions }}
@@ -162,6 +222,16 @@ export const SsbjRisksOpportunities = ({ reportId }: { reportId: string }) => {
               onCancel={() => setIsEditingHorizons(false)}
               onSubmit={event => void handleSaveHorizons(event)}
               readOnly={isSsbjReportLocked(report.review)}
+            />
+            <SsbjRiskCandidates
+              reportId={reportId}
+              industryCode={report.industryCode}
+              decisions={candidates.decisions}
+              items={list.items}
+              readOnly={isSsbjReportLocked(report.review)}
+              onAdopt={openAdopt}
+              onExclude={excludeCandidate}
+              onUndo={undoCandidate}
             />
             <Card>
               <h2 className="m-0 mb-4 text-base font-bold">登録済みのリスク・機会（{list.items.length}件）</h2>
@@ -179,7 +249,8 @@ export const SsbjRisksOpportunities = ({ reportId }: { reportId: string }) => {
       <SsbjRiskOpportunityDialog
         open={editing !== null}
         mode={editing === 'new' ? 'create' : 'edit'}
-        onOpenChange={open => !open && setEditing(null)}
+        onOpenChange={open => !open && closeDialog()}
+        adoptingCandidateTitle={adoptingCandidate?.title ?? null}
         form={form}
         onSubmit={event => void handleSubmit(event)}
       />

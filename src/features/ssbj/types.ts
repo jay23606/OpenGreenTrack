@@ -544,6 +544,29 @@ export type SsbjRiskOpportunity = {
   linkTargets: SsbjLinkTarget[];
 };
 
+/** 業種から出した候補（utils/industryCandidates.ts）への利用者の判断。採用は登録したリスク・機会につなぐ。 */
+export const SSBJ_RISK_CANDIDATE_DECISIONS = ['adopted', 'excluded'] as const;
+
+export type SsbjRiskCandidateDecisionKind = (typeof SSBJ_RISK_CANDIDATE_DECISIONS)[number];
+
+/**
+ * 候補 1 件への判断（ssbj_risk_candidate_decisions の 1 行。作業中データだけに持ち、保存版には含めない）。
+ * 判断は候補を検討の出発点にしたかどうかの記録で、該当性・重要性の判断（T09）ではない。
+ */
+export type SsbjRiskCandidateDecision = {
+  candidateId: string;
+  /** 判断したときの候補の定義の版。 */
+  candidateVersion: string;
+  /** 判断したときのレポートの業種（SICS の産業コード。未選択なら null）。 */
+  industryCode: string | null;
+  decision: SsbjRiskCandidateDecisionKind;
+  /** 採用・除外の理由（内部の記録。開示しない）。除外では必須。 */
+  reason: string | null;
+  /** 採用して登録したリスク・機会。登録したものを削除したら null。 */
+  riskOpportunityId: string | null;
+  updatedAt: string;
+};
+
 /**
  * レポートとしての時間軸の定義（気候関連開示基準 第19項(4)(5)、一般開示基準 第14項(3)(4)）。
  * 「短期」「中期」「長期」がそれぞれ何を指すかと、その定義と戦略上の計画期間との関係。
